@@ -1,0 +1,34 @@
+# 目标板上以系统服务运行 ECU 节点（ROS 2）。安装：
+#   sudo install -D -m 644 deploy/systemd/vsim-ecu.service /etc/systemd/system/vsim-ecu.service
+#   sudo install -D -m 755 deploy/systemd/vsim-ecu-start.sh /opt/vsim/bin/vsim-ecu-start.sh
+#   sudo install -D -m 644 deploy/systemd/ecu.env /etc/vsim/ecu.env
+#   sudo install -D -m 644 src/vsim_ros/config/ecu_hardware.yaml /etc/vsim/ecu.yaml   # 按实机修改
+#   sudo install -D -m 644 deploy/systemd/80-can0.network /etc/systemd/network/80-can0.network
+#   sudo useradd --system --groups dialout vsim && sudo systemctl daemon-reload && sudo systemctl enable --now vsim-ecu
+[Unit]
+Description=vsim ECU control unit (ROS 2 node)
+Wants=network-online.target
+After=network-online.target sys-subsystem-net-devices-can0.device
+BindsTo=sys-subsystem-net-devices-can0.device
+
+[Service]
+Type=simple
+User=vsim
+Group=vsim
+EnvironmentFile=-/etc/vsim/ecu.env
+ExecStart=/opt/vsim/bin/vsim-ecu-start.sh
+# 关停：SIGINT 让节点停止控制循环、输出安全态、正常关闭看门狗
+KillSignal=SIGINT
+TimeoutStopSec=5
+Restart=on-failure
+RestartSec=2
+# 实时：允许 SCHED_FIFO 与内存锁定（ECU 运行时自己设置调度策略与 CPU 亲和性）
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+# 访问硬件看门狗 /dev/watchdog（或用 udev 规则把设备授予 vsim 组）
+SupplementaryGroups=dialout
+DeviceAllow=/dev/watchdog rw
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,116 @@
+# 虚拟整机：3 个单元 + Zenoh 路由器，每个单元一个容器，挂在同一个虚拟以太网 robot_lan 上。
+#
+#   docker compose up --build                     # 单摆（默认），Foxglove/Lichtblick 连 ws://localhost:8765
+#   MODEL=two_link docker compose up              # 两连杆 + 路径点规划
+#   docker compose exec ecu ros2 service call /ecu/set_mode vsim_interfaces/srv/SetEcuMode "{command: 4}"   # 软件急停
+#   docker compose exec sim_host ros2 service call /sim_host/inject_fault vsim_interfaces/srv/InjectFault \
+#       "{type: torque_disturbance, joint: 0, value: 2.0, start_delay: 0.0, duration: 0.5}"
+#
+# ECU 与仿真之间改走虚拟 CAN（接口层级 I2，Linux 宿主）：两个容器启动后会等待 can0 出现
+#   VSIM_IO=can docker compose up -d && sudo scripts/vcan_link.sh
+#
+# 无界面回归（CI）：check 服务观测 10 s 仿真时间，跟踪误差超限或 ECU 离开 RUNNING 则非零退出
+#   docker compose --profile check up --build --abort-on-container-exit --exit-code-from check
+name: vsim
+
+x-env: &env
+  ROS_DOMAIN_ID: "42"
+  RMW_IMPLEMENTATION: rmw_zenoh_cpp
+  # 所有节点以 client 身份连到路由器（真实联网时把 IP 换成路由器所在主机）
+  ZENOH_CONFIG_OVERRIDE: 'mode="client";connect/endpoints=["tcp/10.10.0.2:7447"]'
+
+x-can-env: &can-env
+  <<: *env
+  VSIM_IO: ${VSIM_IO:-ros}                  # ros（I1）| can（I2）
+  VSIM_CAN_IFACE: ${VSIM_CAN_IFACE:-can0}   # io=can 时入口脚本等待该接口出现
+
+x-unit: &unit
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  image: vsim:lyrical
+  restart: on-failure
+  depends_on:
+    zenoh_router:
+      condition: service_healthy
+  environment: *env
+
+services:
+  zenoh_router:                     # 发现与路由（相当于交换机上的"服务发现"）
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: vsim:lyrical
+    command: ros2 run rmw_zenoh_cpp rmw_zenohd
+    environment:
+      ROS_DOMAIN_ID: "42"
+      # 默认配置只监听 IPv6 ANY，Docker 网络常未开 IPv6，改为 IPv4 ANY
+      ZENOH_CONFIG_OVERRIDE: 'listen/endpoints=["tcp/0.0.0.0:7447"]'
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/7447"]
+      interval: 2s
+      retries: 30
+    networks:
+      robot_lan: { ipv4_address: 10.10.0.2 }
+
+  sim_host:                         # 上位机：被控对象仿真 + /clock + 故障注入 + 可视化桥
+    <<: *unit
+    environment: *can-env
+    command:
+      - bash
+      - -c
+      - >-
+        ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765 &
+        exec ros2 launch vsim_ros vsim.launch.py units:=sim_host model:=${MODEL:-pendulum}
+        io:=${VSIM_IO:-ros} can_iface:=${VSIM_CAN_IFACE:-can0}
+    ports: ["8765:8765"]
+    cap_add: [NET_ADMIN]            # tc netem 注入网络损伤
+    networks:
+      robot_lan: { ipv4_address: 10.10.0.10 }
+
+  ecu:                              # 嵌入式 Linux 控制单元
+    <<: *unit
+    environment: *can-env
+    command: >-
+      ros2 launch vsim_ros vsim.launch.py units:=ecu model:=${MODEL:-pendulum}
+      io:=${VSIM_IO:-ros} can_iface:=${VSIM_CAN_IFACE:-can0}
+    cpus: 1.0                       # 近似目标板算力/内存（只是约束，不是精确模拟）
+    mem_limit: 512m
+    cap_add: [NET_ADMIN, SYS_NICE]  # SYS_NICE：打开 rt.enable 时允许 SCHED_FIFO
+    # 指令集级（arm64）仿真：
+    #   docker run --privileged --rm tonistiigi/binfmt --install arm64
+    #   docker buildx build --platform linux/arm64 -f docker/Dockerfile -t vsim:lyrical-arm64 --load .
+    # 然后打开下面两行（仿真变慢；lockstep 下结果与 x86 一致）
+    # image: vsim:lyrical-arm64
+    # platform: linux/arm64
+    networks:
+      robot_lan: { ipv4_address: 10.10.0.20 }
+
+  planner:                          # 高级规划单元
+    <<: *unit
+    command: ros2 launch vsim_ros vsim.launch.py units:=planner model:=${MODEL:-pendulum}
+    cap_add: [NET_ADMIN]
+    # 需要 GPU（感知/学习）时打开，主机需安装 NVIDIA Container Toolkit
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+    networks:
+      robot_lan: { ipv4_address: 10.10.0.30 }
+
+  check:                            # 无界面回归判据（profile: check）
+    <<: *unit
+    profiles: [check]
+    restart: "no"
+    command: >-
+      ros2 run vsim_ros monitor_node --ros-args
+      -p duration:=${CHECK_DURATION:-10.0} -p max_rms:=${CHECK_MAX_RMS:-0.01} -p timeout:=120.0
+    networks:
+      robot_lan: { ipv4_address: 10.10.0.40 }
+
+networks:
+  robot_lan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24      # 若与公司内网冲突，换一个网段（同时改上面的静态地址）

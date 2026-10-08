@@ -1,0 +1,15 @@
+# 构建产物
+build/
+install/
+log/
+# 运行产物
+*.csv
+*.mcap
+*.db3
+rosbag2_*/
+# 编辑器
+.vscode/
+.idea/
+*.swp
+compile_commands.json
+__pycache__/

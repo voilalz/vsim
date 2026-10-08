@@ -1,0 +1,71 @@
+# 实机 ECU 参数（起点模板，不是可以直接上电的配置）：CiA 402 伺服经 can0，ECU 做 SYNC 主站，
+# 实时线程，手动使能，硬件看门狗。键与仿真完全相同（见 docs/configuration.md）。
+#
+# 上电前逐项核对：
+#   1. 机械已固定；驱动器的 STO / 急停回路已接好（软件急停只是补充，不能代替硬件急停）；
+#   2. controller.effort_limit 先调小；safety.position_* 与实际行程一致；
+#   3. node_ids、counts_per_rad、rated_torque、op_mode 与驱动器参数一致；
+#   4. 先把 io.backend 改成 loopback 空跑（不接驱动器），确认参数、实时性与看门狗，再切回 can。
+# 运行：ros2 run vsim_ros ecu_node --ros-args --params-file ecu_hardware.yaml
+#       ros2 service call /ecu/set_mode vsim_interfaces/srv/SetEcuMode "{command: 1}"   # 使能
+ecu:
+  ros__parameters:
+    use_sim_time: false            # 实机：帧时间来自 ECU 的单调时钟，本节点负责与系统时间换算
+    ecu:
+      auto_enable: false           # 必须由操作者使能
+      safe_output: disable         # 故障 / 急停：断开力矩（驱动器侧再配合抱闸 / STO）
+      ref_blend_time: 2.0          # 使能后由当前位置平滑切入轨迹
+      nominal_dt: 0.001
+    model:                         # 与实际机构一致（用于重力 / 逆动力学前馈）
+      type: pendulum
+      mass: 1.0
+      com: 0.5
+      inertia: 0.01
+      damping: 0.05
+      joint_names: [joint1]
+    controller:
+      type: joint_pd
+      kp: [20.0]
+      kd: [1.0]
+      ki: [0.0]
+      effort_limit: [1.0]          # 首次上电用小限幅
+      feedforward: gravity
+    safety:
+      position_min: [-1.5]
+      position_max: [1.5]
+      velocity_max: [3.0]
+      tracking_error_max: 0.2
+      estop:
+        type: none                 # 接入 libgpiod 后改为 gpiod（VSIM_WITH_GPIOD，见 docs/hardware_integration.md）
+        chip: /dev/gpiochip0
+        line: 17
+        active_low: true
+    runtime:
+      read_timeout: 0.005
+      max_consecutive_timeouts: 3  # 连续 3 个周期收不到反馈 → sensor_timeout 故障
+      cycle_budget: 0.0005         # "计算 + 写出"超过 0.5 ms 计为 overrun（见 /ecu/status）
+    rt:
+      enable: true                 # 需要 PREEMPT_RT 内核与 LimitRTPRIO / CAP_SYS_NICE（见 deploy/systemd）
+      required: true               # 实时配置失败（权限不足、核不存在）则拒绝启动，而不是降级运行
+      priority: 80
+      cpu: 3                       # 绑到隔离核（内核参数 isolcpus=3 nohz_full=3 rcu_nocbs=3）
+      lock_memory: true
+    telemetry:
+      decimation: 10
+    io:
+      backend: can
+      can:
+        interface: can0
+        codec: cia402
+        node_ids: [1]
+        sync_master: ecu           # 实机：ECU 按 period 发 SYNC
+        period: 0.001
+        cia402:
+          sync_with_time: false
+          counts_per_rad: 20860.756  # 131072 counts/rev
+          rated_torque: 2.0          # N·m（对象 0x6076），力矩按其千分比传输
+          op_mode: 10                # 10 = CST 周期同步力矩
+    watchdog:
+      type: linux                  # 需要 /dev/watchdog；控制循环停止前进时不再喂狗 → 板级复位
+      device: /dev/watchdog
+      timeout: 1.0

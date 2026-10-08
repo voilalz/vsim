@@ -1,0 +1,91 @@
+# 单摆（1 关节）：三个节点的参数（顶层键 = 节点名）。
+# 键名与 vsim_core 的配置键一一对应（嵌套 = 点分层级）；未列出的键使用核心库默认值。
+sim_host:
+  ros__parameters:
+    use_sim_time: false          # sim_host 是时钟源
+    plant:
+      model:
+        type: pendulum
+        mass: 1.0
+        com: 0.5
+        inertia: 0.01
+        damping: 0.05
+        joint_names: [joint1]
+      drive:
+        effort_limit: [8.0]
+        torque_time_constant: 0.0
+      integrator: rk4
+    sensor:
+      position_noise_std: 0.0001
+      position_resolution: 0.0
+      delay_steps: 0
+      seed: 42
+    sim:
+      dt: 0.001
+      lockstep: true
+      realtime_factor: 1.0       # lockstep 下 0.0 = 尽可能快
+      resend_timeout: 0.1        # lockstep：多久没收到 ECU 回应就重发当前帧（秒）
+      max_lag: 0.1               # 落后墙钟排程超过该值则重新锚定（秒）
+    io:
+      mode: ros                  # ros（I1）| can（I2，见 can_overlay.yaml）
+      can:
+        node_ids: [1]
+    viz:
+      joint_state_decimation: 10
+
+ecu:
+  ros__parameters:
+    use_sim_time: true
+    ecu:
+      auto_enable: true          # 实机建议 false，由操作者经 ~/set_mode 使能
+      safe_output: damping       # damping | disable
+      safe_damping: [1.0]
+      ref_blend_time: 1.0        # 使能时由当前位置平滑切入轨迹（秒），避免参考跳变
+    model:                       # ECU 对被控对象的认知（前馈用），可故意与 sim_host 不同
+      type: pendulum
+      mass: 1.0
+      com: 0.5
+      inertia: 0.01
+      damping: 0.05
+      joint_names: [joint1]
+    controller:
+      type: joint_pd
+      kp: [60.0]
+      kd: [4.0]
+      ki: [0.0]
+      effort_limit: [8.0]
+      feedforward: gravity       # none | gravity | inverse_dynamics
+    safety:
+      velocity_max: [20.0]
+      tracking_error_max: 0.5
+      estop:
+        type: sim                # none | sim | gpiod（预留）
+    telemetry:
+      decimation: 10             # /ecu/controller_state 发布频率 = 控制频率 / 10
+    runtime:
+      read_timeout: 0.1
+      max_consecutive_timeouts: 5
+    rt:
+      enable: false              # 实机 + PREEMPT_RT 时打开
+      priority: 80
+      cpu: -1
+    io:
+      backend: ros_sim           # ros_sim | can | ethercat | loopback
+      can:
+        node_ids: [1]
+        codec: simple
+        sync_master: bus
+    watchdog:
+      type: none                 # none | linux
+
+planner:
+  ros__parameters:
+    use_sim_time: true
+    type: sine                   # sine | waypoints
+    joint_names: [joint1]
+    amplitude: [1.0]
+    frequency: [1.0]
+    scheduler:
+      period: 0.2
+      horizon: 1.0
+      step: 0.05

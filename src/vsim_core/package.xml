@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>vsim_core</name>
+  <version>0.1.0</version>
+  <description>
+    Middleware-independent core of the virtual simulation platform: plant models,
+    simulation engine with lockstep, controllers, planners, ECU application/runtime,
+    and the hardware abstraction layer (CAN, EtherCAT stub, digital I/O, watchdog, RT utilities).
+  </description>
+  <maintainer email="dev@example.com">vsim maintainers</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>cmake</buildtool_depend>
+  <test_depend>gtest</test_depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

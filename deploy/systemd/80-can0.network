@@ -1,0 +1,8 @@
+# /etc/systemd/network/80-can0.network —— 由 systemd-networkd 在启动时配置并拉起 can0
+# （需 systemctl enable systemd-networkd）。波特率与驱动器一致；总线关闭后 100 ms 自动重启。
+[Match]
+Name=can0
+
+[CAN]
+BitRate=1M
+RestartSec=100ms

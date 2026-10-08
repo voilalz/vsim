@@ -1,0 +1,11 @@
+# 向 sim_host 注入故障（对应 vsim::FaultSpec）
+# type: sensor_freeze | sensor_bias | sensor_dropout | actuator_weak | actuator_stuck | torque_disturbance
+
+string type
+int32 joint -1          # -1 = 全部关节
+float64 value
+float64 start_delay     # 相对当前仿真时间的延迟（秒）
+float64 duration        # 持续时间（秒），0 = 一直持续到 clear_faults
+---
+bool success
+string message

@@ -1,0 +1,19 @@
+# 叠加在模型参数文件之后：把 ECU 与 sim_host 之间的 I/O 从 ROS 话题下沉到 CAN（接口层级 I2）。
+# 同机：先创建 vcan0（scripts/vcan_setup.sh）；跨容器：用 vxcan 隧道（scripts/vcan_link.sh），
+# 两端接口名都是 can0 时把下面的 vcan0 改成 can0。
+sim_host:
+  ros__parameters:
+    io:
+      mode: can
+      can:
+        interface: vcan0
+        codec: simple
+
+ecu:
+  ros__parameters:
+    io:
+      backend: can
+      can:
+        interface: vcan0
+        codec: simple
+        sync_master: bus           # 仿真：sim_host 发带时间的 SYNC（lockstep）；实机改为 ecu
